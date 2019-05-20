@@ -321,8 +321,6 @@ open class Store<S: State, D: SideEffectDependencyContainer>: PartialStore<S> {
     } else if let sideEffect = dispatchable as? AnySideEffect {
       return self.enqueueSideEffect(sideEffect)
       
-    } else if let action = dispatchable as? Action {
-      return self.enqueueAction(action)
     }
     
     fatalError("Invalid parameter")
@@ -478,101 +476,16 @@ fileprivate extension Store {
   }
 }
 
-// MARK: Action management
-fileprivate extension Store {
-  
-  /**
-   Enqueues the action.
-   
-   - parameter action: the action to manage
-   - returns: a promise that is resolved when the action is managed
-  */
-  private func enqueueAction(_ action: Action) -> Promise<Void> {
-    let promise = Promise<Void>(in: .custom(queue: self.stateUpdaterQueue)) { [unowned self] resolve, reject, _ in
-      let interceptorsChain = Store.chainedInterceptors(self.initializedInterceptors, with: self.manageAction)
-      try interceptorsChain(action)
-      resolve(())
-    }
-    
-    // triggers the execution of the promise even though no one is listening for it
-    promise.then { _ in }
-    
-    return promise
-  }
-  
-  /**
-   Handles the action. If the passed item doesn't conform to `Action`, then
-   the item is simply dispatched again and not handled here.
-   
-   - parameter dispatchable: the item to handle
-  */
-  private func manageAction(_ dispatchable: Dispatchable) throws -> Void {
-    guard self.isReady else {
-      fatalError("Something is wrong, the side effect queue has been started before the initialization has been completed")
-    }
-    
-    guard let action = dispatchable as? Action else {
-      // interceptor changed the type. Let's dispatch it
-      return self.nonPromisableDispatch(dispatchable)
-    }
-    
-    let logEnd = SignpostLogger.shared.logStart(type: .action, name: dispatchable.debugDescription)
-    
-    let newState = action.updatedState(currentState: self.state)
-    
-    guard let typedNewState = newState as? S else {
-      fatalError("Action updatedState returned a wrong state type")
-    }
-    
-    let previousState = self.state
-    self.state = typedNewState
-    
-    // executes the side effects, if needed
-    self.triggerSideEffect(for: action, previousState: previousState, currentState: typedNewState)
-    
-    logEnd()
-    
-    // listener are always invoked in the main queue
-    DispatchQueue.main.async {
-      self.listeners.values.forEach { $0() }
-    }
-  }
-  
-  /**
-   Executes the side effect, if available
-   
-   - parameter action: the dispatched action
-   - parameter previousState: the previous state
-   - parameter currentState: the current state
-   */
-  fileprivate func triggerSideEffect(for action: Action, previousState: S, currentState: S) {
-    guard let action = action as? ActionWithSideEffect else {
-      return
-    }
-    
-    if let async = action as? AnyAsyncAction, async.state != .loading {
-      return
-    }
-    
-    action.sideEffect(
-      currentState: currentState,
-      previousState: previousState,
-      dispatch: self.nonPromisableDispatch,
-      dependencies: self.dependencies
-    )
-  }
-}
-
 // MARK: Middleware management
 fileprivate extension Store {
   /**
     Type used internally to store partially applied interceptors.
     (that is, an interceptor to which the Store has already passed the context)
   */
-  fileprivate typealias InitializedInterceptor = (_ next: @escaping StoreInterceptorNext) -> (_ dispatchable: Dispatchable) throws -> Void
+  typealias InitializedInterceptor = (_ next: @escaping StoreInterceptorNext) -> (_ dispatchable: Dispatchable) throws -> Void
   
   /// Type used to define a dispatch that can throw
-  fileprivate typealias ThrowingDispatch = (_: Dispatchable) throws -> Void
+  typealias ThrowingDispatch = (_: Dispatchable) throws -> Void
   
   /**
    A function that initialises the given interceptors by binding the
@@ -581,7 +494,7 @@ fileprivate extension Store {
    - parameter interceptors: the interceptors to use to create the chain
    - returns: an array of initialised interceptors
    */
-  fileprivate static func initializedInterceptors(
+  static func initializedInterceptors(
     _ interceptors: [StoreInterceptor],
     sideEffectContext: SideEffectContext<S, D>) -> [InitializedInterceptor] {
     
@@ -598,7 +511,7 @@ fileprivate extension Store {
    - parameter lastStep: the function to execute when all the intercepts are executed
    - returns: a single function that invokes all the interceptors and then the last step
   */
-  fileprivate static func chainedInterceptors(
+  static func chainedInterceptors(
     _ interceptors: [InitializedInterceptor],
     with lastStep: @escaping ThrowingDispatch) -> ThrowingDispatch {
 
